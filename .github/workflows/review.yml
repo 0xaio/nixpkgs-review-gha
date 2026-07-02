@@ -137,6 +137,9 @@ jobs:
       || (matrix.system == 'aarch64-darwin' && 'macos-latest')
       || (matrix.system == 'riscv64-linux' && 'ubuntu-24.04-riscv') }}
 
+    permissions:
+      id-token: write
+
     steps:
       - uses: actions/checkout@v6
         with:
@@ -174,6 +177,12 @@ jobs:
           path: nixpkgs
           persist-credentials: false
 
+      - name: setup niks3
+        if: ${{ inputs.push-to-cache && vars.NIKS3_SERVER_URL != '' }}
+        uses: Mic92/niks3-action@v1.1.0
+        with:
+          server-url: ${{ vars.NIKS3_SERVER_URL }}
+
       - run: nu review/review.nu
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -190,6 +199,7 @@ jobs:
           CACHIX_SIGNING_KEY: ${{ secrets.CACHIX_SIGNING_KEY }}
           IDENTIFY_STILL_FAILING_PACKAGES: ${{ vars.IDENTIFY_STILL_FAILING_PACKAGES }}
           IDENTIFY_UNSUPPORTED_PACKAGES: ${{ vars.IDENTIFY_UNSUPPORTED_PACKAGES }}
+          NIKS3_SERVER_URL: ${{ vars.NIKS3_SERVER_URL }}
 
       - uses: actions/upload-artifact@v7
         with:

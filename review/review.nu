@@ -1,8 +1,9 @@
 use gha.nu *
 
 let inputs = gha review-inputs
-let pushToAttic = $inputs.push-to-cache and $env.ATTIC_SERVER != '' and $env.ATTIC_CACHE != ''
-let pushToCachix = $inputs.push-to-cache and $env.CACHIX_CACHE != ''
+let pushToNiks3 = $inputs.push-to-cache and ($env.NIKS3_SERVER_URL? | default '') != ''
+let pushToAttic = (not $pushToNiks3) and $inputs.push-to-cache and $env.ATTIC_SERVER != '' and $env.ATTIC_CACHE != ''
+let pushToCachix = (not $pushToNiks3) and (not $pushToAttic) and $inputs.push-to-cache and $env.CACHIX_CACHE != ''
 let pr = $env.PR_JSON | from json
 let head = $pr.head.sha
 let base = $pr.base.sha
@@ -34,7 +35,7 @@ gha group $"run nixpkgs-review ($inputs.extra-args-raw)" {
 let reviewDir = $"~/.cache/nixpkgs-review/pr-($inputs.pr)" | path expand
 let reportJson = $"($reviewDir)/report.json"
 
-if $pushToAttic or $pushToCachix {
+if $pushToAttic or $pushToCachix or $pushToNiks3 {
   gha group "push results to cache" {
     let paths = glob $"($reviewDir)/results/*" | path expand
     if ($paths | is-empty) { return }
@@ -50,13 +51,24 @@ if $pushToAttic or $pushToCachix {
       $paths | str join "\n" | attic push --stdin $env.ATTIC_CACHE
       http get -H { Authorization: $"Bearer ($env.ATTIC_TOKEN)" } $"($env.ATTIC_SERVER)_api/v1/cache-config/nixpkgs"
       | select substituter_endpoint public_key is_public
+      | update public_key { [ $in ] }
+      | rename -c { public_key: public_keys }
     } else if $pushToCachix {
       with-env { CACHIX_SIGNING_KEY: ($env.CACHIX_SIGNING_KEY | default -e null) } {
         $paths | str join "\n" | cachix push $env.CACHIX_CACHE
         http get -H { Authorization: $"Bearer ($env.ATTIC_TOKEN)" } $"https://app.cachix.org/api/v1/cache/($env.CACHIX_CACHE)"
         | select uri publicSigningKeys isPublic
-        | update publicSigningKeys { first }
-        | rename substituter_endpoint public_key is_public
+        | update publicSigningKeys { [ ($in | first) ] }
+        | rename substituter_endpoint public_keys is_public
+      }
+    } else if $pushToNiks3 {
+      # niks3-action's post-build-hook already uploaded the paths during the build;
+      # just fetch the public read metadata so we can render the download command.
+      let cfg = http get $"($env.NIKS3_SERVER_URL)/api/cache-config"
+      {
+        substituter_endpoint: ($cfg.substituter_url? | default $env.NIKS3_SERVER_URL)
+        public_keys: $cfg.public_keys
+        is_public: true
       }
     }
 
@@ -70,7 +82,7 @@ if $pushToAttic or $pushToCachix {
     ]
     let publicKeys = [
       "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY="
-      $cache.public_key
+      ...$cache.public_keys
     ]
 
     [
